@@ -15,19 +15,19 @@ def parse_args():
     detection_parser = detection.get_args_parser()
     parser = argparse.ArgumentParser("Submitit for detection", parents=[detection_parser])
     parser.add_argument("--ngpus", default=8, type=int, help="Number of gpus to request on each node")
-    parser.add_argument("--nodes", default=4, type=int, help="Number of nodes to request")
-    parser.add_argument("--timeout", default=60, type=int, help="Duration of the job")
+    parser.add_argument("--nodes", default=1, type=int, help="Number of nodes to request")
+    parser.add_argument("--timeout", default=1440, type=int,
+                        help="Duration of the job in minutes (must fit the partition: short 30, long 1440)")
+    parser.add_argument("--partition", default="long", type=str, help="Slurm partition")
     parser.add_argument("--job_dir", default="", type=str, help="Job dir. Leave empty for automatic.")
     return parser.parse_args()
 
 
 def get_shared_folder() -> Path:
-    user = os.getenv("USER")
-    if Path("/checkpoint/").is_dir():
-        p = Path(f"/checkpoint/{user}/experiments")
-        p.mkdir(exist_ok=True)
-        return p
-    raise RuntimeError("No shared folder available")
+    # Must be on a filesystem visible from every compute node (logs, checkpoints, rendezvous file).
+    p = Path(os.getenv("DETR_EXPERIMENTS_DIR", Path.home() / "experiments"))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def get_init_file():
@@ -93,7 +93,8 @@ def main():
         tasks_per_node=num_gpus_per_node,  # one task per GPU
         cpus_per_task=10,
         nodes=nodes,
-        timeout_min=timeout_min,  # max is 60 * 72
+        timeout_min=timeout_min,  # limited by the partition: short 30, long 1440, debug 4320
+        slurm_partition=args.partition,
     )
 
     executor.update_parameters(name="detr")
