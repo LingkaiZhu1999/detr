@@ -94,6 +94,9 @@ def get_args_parser():
                         help='start epoch')
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
+    parser.add_argument('--amp', default='none', choices=['none', 'bf16'],
+                        help='bf16: run backbone+transformer under autocast (heads and losses stay fp32); '
+                             'applies to training and evaluation. Needs a bf16-capable GPU (Ampere or newer).')
 
     # Weights & Biases logging (off unless --wandb is given)
     parser.add_argument('--wandb', action='store_true', help='log metrics to Weights & Biases')
@@ -114,6 +117,11 @@ def main(args):
     if args.frozen_weights is not None:
         assert args.masks, "Frozen training is meant for segmentation only"
     print(args)
+
+    if args.amp != 'none':
+        assert not args.masks, "--amp is not supported with --masks (the segmentation wrapper bypasses DETR.forward)"
+        assert args.device.startswith('cuda') and torch.cuda.is_available() and torch.cuda.is_bf16_supported(), \
+            "--amp bf16 needs a CUDA GPU with bf16 support"
 
     device = torch.device(args.device)
 

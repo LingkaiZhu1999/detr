@@ -20,7 +20,7 @@ from .transformer import build_transformer
 
 class DETR(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False):
+    def __init__(self, backbone, transformer, num_classes, num_queries, aux_loss=False, amp_dtype=None):
         """ Initializes the model.
         Parameters:
             backbone: torch module of the backbone to be used. See backbone.py
@@ -29,8 +29,11 @@ class DETR(nn.Module):
             num_queries: number of object queries, ie detection slot. This is the maximal number of objects
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+            amp_dtype: None for fp32, or torch.bfloat16 to run the backbone and transformer under autocast.
+                       The class/box heads and everything after them always run in fp32.
         """
         super().__init__()
+        self.amp_dtype = amp_dtype
         self.num_queries = num_queries
         self.transformer = transformer
         hidden_dim = transformer.d_model
@@ -58,12 +61,16 @@ class DETR(nn.Module):
         """
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)
-        features, pos = self.backbone(samples)
+        # Only the heavy part (backbone + transformer) runs in reduced precision.
+        with torch.autocast(device_type='cuda', dtype=self.amp_dtype, enabled=self.amp_dtype is not None):
+            features, pos = self.backbone(samples)
 
-        src, mask = features[-1].decompose()
-        assert mask is not None
-        hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
+            src, mask = features[-1].decompose()
+            assert mask is not None
+            hs = self.transformer(self.input_proj(src), mask, self.query_embed.weight, pos[-1])[0]
 
+        # Heads run outside autocast. hs is already fp32 here because the decoder's final LayerNorm
+        # outputs fp32 under autocast, so the logits and sigmoid boxes stay in fp32.
         outputs_class = self.class_embed(hs)
         outputs_coord = self.bbox_embed(hs).sigmoid()
         out = {'pred_logits': outputs_class[-1], 'pred_boxes': outputs_coord[-1]}
@@ -327,6 +334,7 @@ def build(args):
         num_classes=num_classes,
         num_queries=args.num_queries,
         aux_loss=args.aux_loss,
+        amp_dtype=torch.bfloat16 if args.amp == 'bf16' else None,
     )
     if args.masks:
         model = DETRsegm(model, freeze_detr=(args.frozen_weights is not None))
