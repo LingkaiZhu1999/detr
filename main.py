@@ -95,6 +95,11 @@ def get_args_parser():
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--num_workers', default=2, type=int)
 
+    # Weights & Biases logging (off unless --wandb is given)
+    parser.add_argument('--wandb', action='store_true', help='log metrics to Weights & Biases')
+    parser.add_argument('--wandb_project', default='detr', type=str)
+    parser.add_argument('--wandb_name', default=None, type=str, help='run name')
+
     # distributed training parameters
     parser.add_argument('--world_size', default=1, type=int,
                         help='number of distributed processes')
@@ -188,6 +193,11 @@ def main(args):
             utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, output_dir / "eval.pth")
         return
 
+    use_wandb = args.wandb and utils.is_main_process()
+    if use_wandb:
+        import wandb  # imported lazily so wandb is only required when --wandb is used
+        wandb.init(project=args.wandb_project, name=args.wandb_name, config=vars(args))
+
     print("Start training")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -220,6 +230,15 @@ def main(args):
                      'epoch': epoch,
                      'n_parameters': n_parameters}
 
+        if use_wandb:
+            wandb_stats = {k: v for k, v in log_stats.items() if k != 'test_coco_eval_bbox'}
+            # the 12 COCO bbox numbers come as a list; give them readable names
+            ap_names = ['AP', 'AP50', 'AP75', 'AP_small', 'AP_medium', 'AP_large',
+                        'AR1', 'AR10', 'AR100', 'AR_small', 'AR_medium', 'AR_large']
+            for name, value in zip(ap_names, test_stats.get('coco_eval_bbox', [])):
+                wandb_stats[f'coco/{name}'] = value
+            wandb.log(wandb_stats, step=epoch)
+
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
@@ -238,6 +257,8 @@ def main(args):
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+    if use_wandb:
+        wandb.finish()
 
 
 if __name__ == '__main__':
