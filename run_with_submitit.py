@@ -19,6 +19,8 @@ def parse_args():
     parser.add_argument("--timeout", default=1440, type=int,
                         help="Duration of the job in minutes (must fit the partition: short 30, long 1440)")
     parser.add_argument("--partition", default="long", type=str, help="Slurm partition")
+    parser.add_argument("--gpu_type", default="", type=str,
+                        help="GPU type to request, e.g. L40s (4 per node) or L4 (8 per node). Empty = any type.")
     parser.add_argument("--job_dir", default="", type=str, help="Job dir. Leave empty for automatic.")
     return parser.parse_args()
 
@@ -87,9 +89,15 @@ def main():
     nodes = args.nodes
     timeout_min = args.timeout
 
+    # a specific GPU type is requested through --gres, otherwise any type via gpus_per_node
+    if args.gpu_type:
+        gpu_request = dict(slurm_gres=f"gpu:{args.gpu_type}:{num_gpus_per_node}")
+    else:
+        gpu_request = dict(gpus_per_node=num_gpus_per_node)
+
     executor.update_parameters(
         mem_gb=40 * num_gpus_per_node,
-        gpus_per_node=num_gpus_per_node,
+        **gpu_request,
         tasks_per_node=num_gpus_per_node,  # one task per GPU
         cpus_per_task=10,
         nodes=nodes,
