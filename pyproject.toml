@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "detr"
+version = "0.1.0"
+description = "DETR: End-to-End Object Detection with Transformers (reproduction)"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+dependencies = [
+    "torch>=1.5.0",        # pick the CUDA build that matches your driver, see https://pytorch.org
+    "torchvision>=0.6.0",
+    "numpy",
+    "scipy",               # linear_sum_assignment for the Hungarian matcher
+    "pycocotools",         # COCO evaluation
+    "cython",
+    "submitit",            # Slurm launcher (run_with_submitit.py)
+]
+
+[project.optional-dependencies]
+wandb = ["wandb"]                                                  # --wandb logging
+panoptic = ["panopticapi @ git+https://github.com/cocodataset/panopticapi.git"]
+export = ["onnx", "onnxruntime"]
+dev = ["pytest", "flake8"]
+
+# The repo is a flat set of top-level modules, so list them explicitly.
+# Note: the package name "datasets" shadows the HuggingFace `datasets` library
+# if both are installed in the same environment.
+[tool.setuptools]
+py-modules = ["main", "engine", "hubconf", "run_with_submitit"]
+
+[tool.setuptools.packages.find]
+include = ["models*", "datasets*", "util*"]
