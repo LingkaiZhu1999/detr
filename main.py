@@ -79,6 +79,9 @@ def get_args_parser():
                         help="Relative classification weight of the no-object class")
 
     # dataset parameters
+    parser.add_argument('--wandb_project', default='', type=str,
+                        help='Log to Weights & Biases if set (use WANDB_MODE=offline without internet)')
+    parser.add_argument('--wandb_name', default='', type=str)
     parser.add_argument('--dataset_file', default='coco')
     parser.add_argument('--coco_path', type=str)
     parser.add_argument('--coco_panoptic_path', type=str)
@@ -189,6 +192,20 @@ def main(args):
         return
 
     print("Start training")
+    wandb_run = None
+    if args.wandb_project and utils.is_main_process():
+        import uuid, wandb
+        # persist the run id so requeued/resumed jobs continue the same W&B run
+        id_file = output_dir / 'wandb_id'
+        if id_file.exists():
+            run_id = id_file.read_text().strip()
+        else:
+            run_id = uuid.uuid4().hex[:8]
+            output_dir.mkdir(parents=True, exist_ok=True)
+            id_file.write_text(run_id)
+        wandb_run = wandb.init(project=args.wandb_project, name=args.wandb_name or None,
+                               id=run_id, resume='allow', config=vars(args), dir=str(output_dir))
+
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -219,6 +236,13 @@ def main(args):
                      **{f'test_{k}': v for k, v in test_stats.items()},
                      'epoch': epoch,
                      'n_parameters': n_parameters}
+
+        if wandb_run is not None:
+            wlog = {k: v for k, v in log_stats.items() if not isinstance(v, (list, tuple))}
+            ap_names = ['AP', 'AP50', 'AP75', 'APs', 'APm', 'APl']
+            for i, v in enumerate(test_stats.get('coco_eval_bbox', [])[:6]):
+                wlog[f'val/{ap_names[i]}'] = v
+            wandb_run.log(wlog, step=epoch)
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:

@@ -14,20 +14,29 @@ import submitit
 def parse_args():
     detection_parser = detection.get_args_parser()
     parser = argparse.ArgumentParser("Submitit for detection", parents=[detection_parser])
-    parser.add_argument("--ngpus", default=8, type=int, help="Number of gpus to request on each node")
-    parser.add_argument("--nodes", default=4, type=int, help="Number of nodes to request")
-    parser.add_argument("--timeout", default=60, type=int, help="Duration of the job")
+    parser.add_argument("--ngpus", default=4, type=int, help="Number of gpus to request on each node (GH200 nodes have 4)")
+    parser.add_argument("--nodes", default=1, type=int, help="Number of nodes to request")
+    parser.add_argument("--timeout", default=60 * 24, type=int, help="Duration of the job in minutes (partition max is 3 days)")
+    parser.add_argument("--partition", default="gpu", type=str, help="Slurm partition")
+    parser.add_argument("--account", default="naiss2026-3-377-gpu", type=str, help="Slurm account")
+    parser.add_argument("--cpus_per_task", default=16, type=int, help="CPU cores per task (one task per GPU)")
+    parser.add_argument("--mem_per_gpu", default=100, type=int, help="Memory in GB per GPU")
     parser.add_argument("--job_dir", default="", type=str, help="Job dir. Leave empty for automatic.")
+    parser.set_defaults(
+        coco_path="/nobackup/proj/flash/naiss2025-6-383/personal/lingkai/data/coco/zips",
+        num_workers=int(os.getenv("DETR_NUM_WORKERS", 8)),
+    )
     return parser.parse_args()
 
 
 def get_shared_folder() -> Path:
-    user = os.getenv("USER")
-    if Path("/checkpoint/").is_dir():
-        p = Path(f"/checkpoint/{user}/experiments")
-        p.mkdir(exist_ok=True)
-        return p
-    raise RuntimeError("No shared folder available")
+    # Must be on a filesystem visible from all compute nodes (also used for the dist init file).
+    p = Path(os.getenv(
+        "DETR_EXP_DIR",
+        "/nobackup/proj/flash/naiss2025-6-383/personal/lingkai/experiments/detr",
+    ))
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def get_init_file():
@@ -80,7 +89,7 @@ def main():
         args.job_dir = get_shared_folder() / "%j"
 
     # Note that the folder will depend on the job_id, to easily track experiments
-    executor = submitit.AutoExecutor(folder=args.job_dir, slurm_max_num_timeout=30)
+    executor = submitit.AutoExecutor(folder=args.job_dir, cluster="slurm", slurm_max_num_timeout=30)
 
     # cluster setup is defined by environment variables
     num_gpus_per_node = args.ngpus
@@ -88,13 +97,21 @@ def main():
     timeout_min = args.timeout
 
     executor.update_parameters(
-        mem_gb=40 * num_gpus_per_node,
+        mem_gb=args.mem_per_gpu * num_gpus_per_node,
         gpus_per_node=num_gpus_per_node,
         tasks_per_node=num_gpus_per_node,  # one task per GPU
-        cpus_per_task=10,
+        cpus_per_task=args.cpus_per_task,
         nodes=nodes,
         timeout_min=timeout_min,  # max is 60 * 72
+        slurm_partition=args.partition,
+        slurm_additional_parameters={"account": args.account},
+        # each job builds/activates its own aarch64 env, whatever shell submitted it
+        slurm_setup=[f"source {Path(__file__).resolve().parent}/setup_env.sh"],
     )
+
+    # submitit would otherwise launch the job with the *submitting* shell's (x86) python.
+    # `python` is a SlurmExecutor constructor arg, not an update_parameters one, so set it directly.
+    executor._executor.python = os.path.expanduser("~/deep-learning/.venv-aarch64/bin/python")
 
     executor.update_parameters(name="detr")
 
